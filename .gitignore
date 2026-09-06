@@ -1,0 +1,15 @@
+﻿*.bin
+*.BIN
+*.exe
+*.EXE
+*.bak*
+__pycache__/
+*.pyc
+step*.py
+test*.py
+*.xlsx
+*.csv
+*.json
+固件集合/
+sdf-flash-gui-1.0.0/
+*token*.txt
