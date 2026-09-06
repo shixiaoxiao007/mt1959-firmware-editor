@@ -537,6 +537,158 @@ class RecordAddDialog(QDialog):
 
 
 
+class CopyRecordDialog(QDialog):
+    """复制记录对话框"""
+    
+    def __init__(self, parent, fw, src_table, src_record):
+        super().__init__(parent)
+        self.fw = fw
+        self.src_table = src_table
+        self.src_record = src_record
+        
+        self.setWindowTitle(f"复制记录 - {src_table}[{src_record['idx']}]")
+        self.setModal(True)
+        self.setMinimumWidth(500)
+        
+        self.setup_ui()
+    
+    def setup_ui(self):
+        layout = QVBoxLayout()
+        
+        # 源记录信息
+        src_group = QGroupBox("源记录")
+        src_layout = QVBoxLayout()
+        
+        src_info = []
+        src_info.append(f"物理表: {self.src_table}")
+        src_info.append(f"槽位索引: {self.src_record['idx']}")
+        
+        if self.src_record['type'] == 'valid':
+            src_info.append(f"MID: {self.src_record['mid']}")
+        else:
+            src_info.append(f"类型: {TYPE_LABEL[self.src_record['type']]}")
+        
+        src_info.append(f"参数: {self.src_record['params'].hex()}")
+        
+        src_label = QLabel('\n'.join(src_info))
+        src_layout.addWidget(src_label)
+        src_group.setLayout(src_layout)
+        layout.addWidget(src_group)
+        
+        # 目标选择
+        dst_group = QGroupBox("目标位置")
+        dst_layout = QVBoxLayout()
+        
+        # 表选择
+        table_layout = QHBoxLayout()
+        table_layout.addWidget(QLabel("目标表:"))
+        self.table_combo = QComboBox()
+        self.table_combo.addItems(['BD-XL', '15B-A', '15B-B', '15B-C', '15B-D'])
+        self.table_combo.currentTextChanged.connect(self.on_table_changed)
+        table_layout.addWidget(self.table_combo)
+        table_layout.addStretch()
+        dst_layout.addLayout(table_layout)
+        
+        # 槽位选择
+        slot_layout = QHBoxLayout()
+        slot_layout.addWidget(QLabel("目标槽位:"))
+        self.slot_combo = QComboBox()
+        slot_layout.addWidget(self.slot_combo)
+        slot_layout.addStretch()
+        dst_layout.addLayout(slot_layout)
+        
+        # 警告标签
+        self.warning_label = QLabel()
+        self.warning_label.setStyleSheet("color: red;")
+        self.warning_label.setWordWrap(True)
+        dst_layout.addWidget(self.warning_label)
+        
+        dst_group.setLayout(dst_layout)
+        layout.addWidget(dst_group)
+        
+        # 按钮
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        
+        cancel_btn = QPushButton("取消")
+        cancel_btn.clicked.connect(self.reject)
+        btn_layout.addWidget(cancel_btn)
+        
+        self.copy_btn = QPushButton("确定复制")
+        self.copy_btn.clicked.connect(self.do_copy)
+        btn_layout.addWidget(self.copy_btn)
+        
+        layout.addLayout(btn_layout)
+        
+        self.setLayout(layout)
+        
+        # 初始化
+        self.on_table_changed(self.table_combo.currentText())
+    
+    def on_table_changed(self, table_name):
+        """目标表改变时更新槽位列表"""
+        self.slot_combo.clear()
+        self.warning_label.setText("")
+        
+        try:
+            table_data = self.fw.table(table_name)
+            records = table_data['records']
+            
+            for i, rec in enumerate(records):
+                label = f"[{i}] {TYPE_LABEL[rec['type']]}"
+                if rec['type'] == 'valid':
+                    label += f" - {rec['mid']}"
+                elif rec['type'] == 'reserved':
+                    label += f" - {rec['params'].hex()[:16]}..."
+                
+                self.slot_combo.addItem(label, i)
+            
+            # 检查步长兼容性
+            src_stride = self.fw.table(self.src_table)['stride']
+            dst_stride = table_data['stride']
+            
+            if src_stride != dst_stride:
+                if src_stride > dst_stride:
+                    self.warning_label.setText(
+                        f"⚠ 警告: 源记录 {src_stride} 字节，目标表 {dst_stride} 字节，参数将被截断"
+                    )
+                else:
+                    self.warning_label.setText(
+                        f"ℹ 提示: 源记录 {src_stride} 字节，目标表 {dst_stride} 字节，将用 0xFF 补齐"
+                    )
+        
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"无法加载目标表:\n{str(e)}")
+    
+    def do_copy(self):
+        """执行复制"""
+        dst_table = self.table_combo.currentText()
+        dst_slot = self.slot_combo.currentData()
+        
+        if dst_slot is None:
+            QMessageBox.warning(self, "错误", "请选择目标槽位")
+            return
+        
+        try:
+            # 调用 fw_core 的 copy_record 方法
+            self.fw.copy_record(
+                self.src_table,
+                self.src_record['idx'],
+                dst_table,
+                dst_slot
+            )
+            
+            QMessageBox.information(
+                self,
+                "复制成功",
+                f"已将 {self.src_table}[{self.src_record['idx']}] 复制到 {dst_table}[{dst_slot}]"
+            )
+            
+            self.accept()
+        
+        except Exception as e:
+            QMessageBox.critical(self, "复制失败", f"无法复制记录:\n{str(e)}")
+
 
 class PhysicalTableView(QWidget):
     def __init__(self, parent):
@@ -588,6 +740,9 @@ class PhysicalTableView(QWidget):
         self.delete_btn = QPushButton("删除选中记录")
         self.delete_btn.clicked.connect(self.delete_selected)
         btn_layout.addWidget(self.delete_btn)
+        self.copy_btn = QPushButton("复制到...")
+        self.copy_btn.clicked.connect(self.copy_selected)
+        btn_layout.addWidget(self.copy_btn)
         btn_layout.addWidget(self.detail_btn)
         btn_layout.addStretch()
         layout.addLayout(btn_layout)
@@ -780,6 +935,35 @@ class PhysicalTableView(QWidget):
             )
         except Exception as e:
             QMessageBox.critical(self, "删除失败", f"无法删除记录:\n{str(e)}")
+    def copy_selected(self):
+        """复制选中记录到其他表"""
+        fw = self.parent_window.fw
+        if not fw:
+            return
+        
+        record = self.current_record()
+        if not record:
+            QMessageBox.information(self, "提示", "请先选中一行记录")
+            return
+        
+        if record['type'] not in ('valid', 'reserved'):
+            QMessageBox.warning(
+                self, "不允许复制",
+                f"{self.current_table}[{record['idx']}] 是{TYPE_LABEL[record['type']]}，不允许复制"
+            )
+            return
+        
+        if not fw.exact:
+            QMessageBox.warning(
+                self, "不允许编辑",
+                f"该固件不能被当前压缩器逐字节复现：\n{fw.exact_info}"
+            )
+            return
+        
+        # 弹出复制对话框
+        dialog = CopyRecordDialog(self, fw, self.current_table, record)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.parent_window.on_data_changed()
 
 
 
@@ -835,6 +1019,9 @@ class LogicalTableView(QWidget):
         self.delete_btn = QPushButton("删除选中记录")
         self.delete_btn.clicked.connect(self.delete_selected)
         btn_layout.addWidget(self.delete_btn)
+        self.copy_btn = QPushButton("复制到...")
+        self.copy_btn.clicked.connect(self.copy_selected)
+        btn_layout.addWidget(self.copy_btn)
         self.detail_btn = QPushButton("查看详情")
         self.detail_btn.clicked.connect(self.show_selected_detail)
         btn_layout.addWidget(self.detail_btn)
@@ -1025,7 +1212,35 @@ class LogicalTableView(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "删除失败", f"无法删除记录:\n{str(e)}")
 
-
+    def copy_selected(self):
+        """复制选中记录到其他表"""
+        record = self.current_record()
+        if not record:
+            QMessageBox.information(self, "提示", "请先选中一行记录")
+            return
+        
+        fw = self.parent_window.fw
+        if not fw:
+            return
+        
+        if record['type'] not in ('valid', 'reserved'):
+            QMessageBox.warning(
+                self, "不允许复制",
+                f"{record['table']}[{record['idx']}] 是{TYPE_LABEL[record['type']]}，不允许复制"
+            )
+            return
+        
+        if not fw.exact:
+            QMessageBox.warning(
+                self, "不允许编辑",
+                f"该固件不能被当前压缩器逐字节复现：\n{fw.exact_info}"
+            )
+            return
+        
+        # 弹出复制对话框
+        dialog = CopyRecordDialog(self, fw, record['table'], record)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.parent_window.on_data_changed()
 
 
 class MainWindow(QMainWindow):
