@@ -1336,7 +1336,13 @@ class MainWindow(QMainWindow):
         edit_menu.addSeparator()
         edit_menu.addAction("复制参数(&C)")
         tool_menu = menubar.addMenu("工具(&T)")
-        tool_menu.addAction("WSR 克隆(&W)...")
+        replace_from_action = QAction("WSR 替换自其他固件(&F)...", self)
+        replace_from_action.triggered.connect(self.replace_wsr_from)
+        tool_menu.addAction(replace_from_action)
+        
+        replace_to_action = QAction("WSR 替换到其他固件(&T)...", self)
+        replace_to_action.triggered.connect(self.replace_wsr_to)
+        tool_menu.addAction(replace_to_action)
         tool_menu.addAction("恢复默认 MID 列表(&R)...")
         tool_menu.addSeparator()
         tool_menu.addAction("导出列表(&E)...")
@@ -1667,8 +1673,168 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "删除失败", f"无法删除记录:\n{str(e)}")
 
-
-
+    def replace_wsr_from(self):
+        """从其他固件替换 WSR 到当前固件"""
+        if not self.fw:
+            QMessageBox.warning(self, "未打开固件", "请先打开一个固件文件")
+            return
+        
+        if not self.fw.exact:
+            QMessageBox.warning(
+                self, "不允许编辑",
+                f"当前固件不能被压缩器逐字节复现：\n{self.fw.exact_info}\n\n无法进行 WSR 替换"
+            )
+            return
+        
+        # 选择源固件文件
+        source_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择源固件文件",
+            "",
+            "固件文件 (*.bin);;所有文件 (*)"
+        )
+        
+        if not source_path:
+            return
+        
+        try:
+            # 读取源固件
+            source_fw = Firmware(source_path)
+            
+            if not source_fw.exact:
+                reply = QMessageBox.question(
+                    self,
+                    "源固件警告",
+                    f"源固件无法被压缩器逐字节复现：\n{source_fw.exact_info}\n\n"
+                    f"可能导致 WSR 数据不完整或损坏。\n\n是否继续？",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                )
+                if reply == QMessageBox.StandardButton.No:
+                    return
+            
+            # 确认替换
+            reply = QMessageBox.question(
+                self,
+                "确认替换",
+                f"从源固件读取 WSR：\n{source_path}\n\n"
+                f"替换到当前固件：\n{self.fw_path}\n\n"
+                f"当前固件的所有 WSR 数据将被覆盖，确定继续？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            
+            if reply == QMessageBox.StandardButton.No:
+                return
+            
+            # 执行替换
+            self.fw.replace_plain(source_fw.plain)
+            self.on_data_changed()
+            
+            QMessageBox.information(
+                self,
+                "替换成功",
+                f"已从源固件替换 WSR 区域\n\n"
+                f"源固件: {source_path}\n"
+                f"目标固件: {self.fw_path}\n\n"
+                f"请记得保存当前固件！"
+            )
+        
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "替换失败",
+                f"无法从源固件替换 WSR:\n{str(e)}"
+            )
+    
+    def replace_wsr_to(self):
+        """将当前固件的 WSR 替换到其他固件"""
+        if not self.fw:
+            QMessageBox.warning(self, "未打开固件", "请先打开一个固件文件")
+            return
+        
+        if not self.fw.exact:
+            QMessageBox.warning(
+                self, "不允许导出",
+                f"当前固件不能被压缩器逐字节复现：\n{self.fw.exact_info}\n\n"
+                f"无法保证导出的 WSR 数据正确性"
+            )
+            return
+        
+        # 选择目标固件文件
+        target_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择目标固件文件",
+            "",
+            "固件文件 (*.bin);;所有文件 (*)"
+        )
+        
+        if not target_path:
+            return
+        
+        try:
+            # 读取目标固件
+            target_fw = Firmware(target_path)
+            
+            if not target_fw.exact:
+                reply = QMessageBox.question(
+                    self,
+                    "目标固件警告",
+                    f"目标固件无法被压缩器逐字节复现：\n{target_fw.exact_info}\n\n"
+                    f"替换后可能无法正常保存。\n\n是否继续？",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                )
+                if reply == QMessageBox.StandardButton.No:
+                    return
+            
+            # 确认替换
+            reply = QMessageBox.question(
+                self,
+                "确认替换",
+                f"从当前固件读取 WSR：\n{self.fw_path}\n\n"
+                f"替换到目标固件：\n{target_path}\n\n"
+                f"目标固件的所有 WSR 数据将被覆盖，确定继续？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            
+            if reply == QMessageBox.StandardButton.No:
+                return
+            
+            # 执行替换
+            target_fw.replace_plain(self.fw.plain)
+            
+            # 选择输出文件
+            output_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "保存替换后的固件",
+                target_path.replace('.bin', '_wsr_replaced.bin'),
+                "固件文件 (*.bin);;所有文件 (*)"
+            )
+            
+            if not output_path:
+                return
+            
+            # 保存文件
+            success, msg = target_fw.save(output_path)
+            
+            if not success:
+                QMessageBox.critical(self, "保存失败", f"无法保存替换后的固件:\n{msg}")
+                return
+            
+            QMessageBox.information(
+                self,
+                "替换成功",
+                f"已将当前 WSR 替换到目标固件\n\n"
+                f"源 WSR: {self.fw_path}\n"
+                f"目标固件: {target_path}\n"
+                f"输出文件: {output_path}"
+            )
+        
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "替换失败",
+                f"无法替换 WSR 到目标固件:\n{str(e)}"
+            )
+    
 
 def main():
     app = QApplication(sys.argv)
